@@ -316,6 +316,25 @@ export default function App() {
     setCurrentView('dashboard');
   };
 
+  const handleQuickDemoLogin = async (email: string) => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: 'password123' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.user) {
+        confetti({ particleCount: 50, spread: 60 });
+        handleAuthSuccess(data.user, data.classroom, data.message || `Welcome back, ${data.user.name}!`);
+      } else {
+        showToast(data.error || 'Failed to authenticate demo account.');
+      }
+    } catch {
+      showToast('Error connecting to demo authentication server.');
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
@@ -606,6 +625,7 @@ export default function App() {
             onOpenCreateClassroom={() => handleNavigate('create-classroom')}
             onOpenJoinClassroom={() => setIsJoinOpen(true)}
             onOpenAuth={handleOpenAuth}
+            onQuickDemoLogin={handleQuickDemoLogin}
           />
         )}
 
