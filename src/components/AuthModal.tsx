@@ -81,7 +81,7 @@ interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialMode?: 'login' | 'signup' | 'forgot-password' | 'reset-password';
-  onAuthSuccess: (user: User, classroom: Classroom, message: string) => void;
+  onAuthSuccess: (user: User, classroom: Classroom | null, message: string) => void;
   classrooms: Classroom[];
 }
 
@@ -104,12 +104,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
-  // Sign Up form state (6 required fields)
+  // Sign Up form state (5 required fields)
   const [fullName, setFullName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [classCode, setClassCode] = useState('');
   const [registrationNumber, setRegistrationNumber] = useState('');
 
   // Forgot password & Reset password form state
@@ -152,7 +151,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const newPasswordStrength = getPasswordStrength(newPassword);
 
   // Helper to map Supabase User & Profile to application User object
-  const buildAppUser = async (supabaseUser: any, fallbackProfile?: any): Promise<{ user: User; classroom: Classroom }> => {
+  const buildAppUser = async (supabaseUser: any, fallbackProfile?: any): Promise<{ user: User; classroom: Classroom | null }> => {
     let profileData: any = fallbackProfile || null;
 
     try {
@@ -178,8 +177,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const resolvedClassCode =
       profileData?.class_code ||
       supabaseUser.user_metadata?.class_code ||
-      classCode ||
-      'DEFAULT';
+      '';
 
     const resolvedRegNo =
       profileData?.registration_number ||
@@ -187,27 +185,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       registrationNumber ||
       '';
 
-    // Match or create fallback classroom cohort
-    const matched = classrooms.find(
-      (c) => c.code.trim().toLowerCase() === resolvedClassCode.trim().toLowerCase()
-    );
-
-    const fallbackClassroom: Classroom = matched || {
-      id: `cls-${resolvedClassCode.toLowerCase().replace(/[^a-z0-9]/g, '') || 'general'}`,
-      code: resolvedClassCode.toUpperCase(),
-      name: `Classroom Cohort ${resolvedClassCode.toUpperCase()}`,
-      collegeName: 'Academic Sanctuary',
-      location: 'Main Campus',
-      department: 'Engineering & Sciences',
-      course: 'Academic Cohort',
-      degreeLevel: 'undergraduate',
-      batchYear: '2026',
-      section: 'A',
-      semester: 'Semester 1',
-      superAdminId: supabaseUser.id,
-      memberCount: 1,
-      createdAt: new Date().toISOString(),
-    };
+    // Match classroom cohort if class code is provided
+    const matched = resolvedClassCode
+      ? classrooms.find(
+          (c) => c.code.trim().toLowerCase() === resolvedClassCode.trim().toLowerCase()
+        ) || null
+      : null;
 
     const appUser: User = {
       id: supabaseUser.id,
@@ -217,12 +200,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       role: 'student',
       department: 'Academic Sanctuary',
       rollNumber: resolvedRegNo,
-      classCode: resolvedClassCode,
+      classCode: resolvedClassCode || undefined,
       registrationNumber: resolvedRegNo,
-      classroomId: fallbackClassroom.id,
+      classroomId: matched?.id || undefined,
     };
 
-    return { user: appUser, classroom: fallbackClassroom };
+    return { user: appUser, classroom: matched };
   };
 
   // 1. Handle Login
@@ -327,7 +310,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setSuccessMessage(null);
     setEmailConfirmationSent(false);
 
-    // Strict validation of the 6 required fields
+    // Strict validation of the required fields
     if (!fullName.trim()) {
       setErrorMessage('Please enter your Full Name.');
       setLoading(false);
@@ -337,12 +320,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!signupEmail.trim() || !emailPattern.test(signupEmail.trim())) {
       setErrorMessage('Please enter a valid email address (e.g., student@university.edu).');
-      setLoading(false);
-      return;
-    }
-
-    if (!classCode.trim()) {
-      setErrorMessage('Please enter your Class Code.');
       setLoading(false);
       return;
     }
@@ -376,7 +353,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const trimmedEmail = signupEmail.trim().toLowerCase();
       const trimmedFullName = fullName.trim();
-      const trimmedClassCode = classCode.trim().toUpperCase();
       const trimmedRegNo = registrationNumber.trim().toUpperCase();
 
       // Register user through Supabase Auth or Local Server
@@ -389,7 +365,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           options: {
             data: {
               full_name: trimmedFullName,
-              class_code: trimmedClassCode,
               registration_number: trimmedRegNo,
             },
           },
@@ -402,7 +377,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               .upsert({
                 id: data.user.id,
                 full_name: trimmedFullName,
-                class_code: trimmedClassCode,
                 registration_number: trimmedRegNo,
               });
           } catch (pe) {
@@ -422,7 +396,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const { user: appUser, classroom: appClassroom } = await buildAppUser(data.user, {
             id: data.user.id,
             full_name: trimmedFullName,
-            class_code: trimmedClassCode,
             registration_number: trimmedRegNo,
           });
 
@@ -446,15 +419,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           regNo: trimmedRegNo,
           rollNumber: trimmedRegNo,
           department: 'Computer Science & Engineering',
-          classroomCode: trimmedClassCode,
-          classroomOption: 'join',
         }),
       });
 
       const resData = await res.json();
       if (res.ok && resData.user) {
         confetti({ particleCount: 70, spread: 80 });
-        onAuthSuccess(resData.user, resData.classroom, resData.message || 'Account created successfully!');
+        onAuthSuccess(resData.user, resData.classroom || null, resData.message || 'Account created successfully!');
         onClose();
         return;
       }
@@ -930,43 +901,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            {/* 3. Class Code & 4. Registration Number */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-              <div>
-                <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
-                  Class Code <span className="text-[#ba1a1a]">*</span>
-                </label>
-                <div className="relative">
-                  <GraduationCap className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. BTECH26A"
-                    value={classCode}
-                    onChange={(e) => setClassCode(e.target.value.toUpperCase())}
-                    className="w-full pl-12 sm:pl-14 pr-4 py-4 text-base sm:text-lg font-mono font-bold uppercase rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] shadow-xs focus:outline-none focus:border-[#56615a]"
-                  />
-                </div>
-                <span className="text-xs text-[#737874] mt-1 block">Classroom cohort code to join</span>
+            {/* 3. Registration Number */}
+            <div>
+              <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
+                Registration Number <span className="text-[#ba1a1a]">*</span>
+              </label>
+              <div className="relative">
+                <Award className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 2024CS104"
+                  value={registrationNumber}
+                  onChange={(e) => setRegistrationNumber(e.target.value.toUpperCase())}
+                  className="w-full pl-12 sm:pl-14 pr-4 py-4 text-base sm:text-lg font-mono font-bold uppercase rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] shadow-xs focus:outline-none focus:border-[#56615a]"
+                />
               </div>
-
-              <div>
-                <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
-                  Registration Number <span className="text-[#ba1a1a]">*</span>
-                </label>
-                <div className="relative">
-                  <Award className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. 2024CS104"
-                    value={registrationNumber}
-                    onChange={(e) => setRegistrationNumber(e.target.value.toUpperCase())}
-                    className="w-full pl-12 sm:pl-14 pr-4 py-4 text-base sm:text-lg font-mono font-bold uppercase rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] shadow-xs focus:outline-none focus:border-[#56615a]"
-                  />
-                </div>
-                <span className="text-xs text-[#737874] mt-1 block">Unique student or roll number</span>
-              </div>
+              <span className="text-xs text-[#737874] mt-1 block">Unique student or roll number</span>
             </div>
 
             {/* 5. Password & 6. Confirm Password */}
