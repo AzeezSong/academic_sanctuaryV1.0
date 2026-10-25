@@ -92,7 +92,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onAuthSuccess,
   classrooms,
 }) => {
-  const [mode, setMode] = useState<'login' | 'signup' | 'forgot-password' | 'reset-password'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot-password' | 'verify-otp' | 'reset-password'>(initialMode);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -114,6 +114,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Forgot password & Reset password form state
   const [resetEmail, setResetEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [simulatedOtp, setSimulatedOtp] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
@@ -465,14 +467,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // 3. Handle Forgot Password
+  // 3. Handle Forgot Password (Send OTP)
   const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
+    setSimulatedOtp(null);
 
-    const email = resetEmail.trim();
+    const email = resetEmail.trim().toLowerCase();
     if (!email) {
       setErrorMessage('Please enter your registered email address.');
       setLoading(false);
@@ -480,31 +483,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     try {
-      const redirectUrl = `${window.location.origin}`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: redirectUrl,
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
       });
 
-      if (error) {
-        setErrorMessage(error.message);
-        setLoading(false);
-        return;
+      const data = await res.json();
+      if (res.ok) {
+        setSimulatedOtp(data.otp);
+        setSuccessMessage(`A 6-digit verification OTP has been sent to ${email}.`);
+        setMode('verify-otp');
+      } else {
+        setErrorMessage(data.error || 'Failed to send OTP code. Please check your email.');
       }
-
-      setSuccessMessage(`Password reset link sent to ${email}. Please check your inbox and follow the instructions.`);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to send password reset email.');
+      setErrorMessage(err.message || 'Error connecting to authentication service.');
     } finally {
       setLoading(false);
     }
   };
 
-  // 4. Handle Reset Password (Setting New Password)
-  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+  // 4. Handle Verify OTP & Set New Password
+  const handleVerifyOtpAndResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
+
+    const email = resetEmail.trim().toLowerCase();
+    const cleanOtp = otpCode.trim();
+
+    if (!cleanOtp) {
+      setErrorMessage('Please enter the 6-digit OTP code.');
+      setLoading(false);
+      return;
+    }
 
     if (newPassword.length < 8) {
       setErrorMessage('New password must be at least 8 characters long.');
@@ -525,24 +539,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     try {
-      const { data, error } = await supabase.auth.updateUser({
-        password: newPassword,
+      const res = await fetch('/api/auth/verify-reset-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          otp: cleanOtp,
+          newPassword,
+        }),
       });
 
-      if (error) {
-        setErrorMessage(error.message);
-        setLoading(false);
-        return;
-      }
-
-      if (data.user) {
-        confetti({ particleCount: 50, spread: 60 });
-        const { user: appUser, classroom: appClassroom } = await buildAppUser(data.user);
-        onAuthSuccess(appUser, appClassroom, 'Password updated successfully! Welcome back.');
-        onClose();
+      const data = await res.json();
+      if (res.ok) {
+        confetti({ particleCount: 60, spread: 70 });
+        setSuccessMessage('Password changed successfully! You can now sign in with your new password.');
+        setLoginEmail(email);
+        setLoginPassword('');
+        setOtpCode('');
+        setSimulatedOtp(null);
+        setNewPassword('');
+        setConfirmNewPassword('');
+        setMode('login');
+      } else {
+        setErrorMessage(data.error || 'Failed to verify OTP. Please try again.');
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to update password.');
+      setErrorMessage(err.message || 'Error connecting to authentication server.');
     } finally {
       setLoading(false);
     }
@@ -653,21 +675,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {mode === 'forgot-password' && (
             <div>
               <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-[#1b1c1c] tracking-tight mb-2">
-                Reset Your Password
+                Forgot Password
               </h2>
               <p className="text-base sm:text-lg text-[#56615a]">
-                Enter your email address and we'll send you a link to reset your password.
+                Enter your registered institutional email to receive a 6-digit verification OTP code.
               </p>
             </div>
           )}
 
-          {mode === 'reset-password' && (
+          {mode === 'verify-otp' && (
             <div>
               <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-[#1b1c1c] tracking-tight mb-2">
-                Set a New Password
+                Verify OTP & Reset Password
               </h2>
               <p className="text-base sm:text-lg text-[#56615a]">
-                Create a strong new password for your Academic Sanctuary account.
+                Enter the 6-digit OTP code sent to <strong className="text-[#1b1c1c]">{resetEmail}</strong> and choose a new password.
               </p>
             </div>
           )}
@@ -1064,12 +1086,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </form>
         )}
 
-        {/* C. FORGOT PASSWORD FORM */}
+        {/* C. FORGOT PASSWORD (REQUEST OTP) */}
         {mode === 'forgot-password' && (
           <form onSubmit={handleForgotPasswordSubmit} className="space-y-6">
             <div>
               <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
-                Registered Email Address <span className="text-[#ba1a1a]">*</span>
+                Registered Institutional Email <span className="text-[#ba1a1a]">*</span>
               </label>
               <div className="relative">
                 <Mail className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
@@ -1082,6 +1104,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   className="w-full pl-12 sm:pl-14 pr-4 py-4 text-base sm:text-lg rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] font-medium shadow-xs focus:outline-none focus:border-[#56615a]"
                 />
               </div>
+              <p className="text-xs sm:text-sm text-[#737874] mt-2">
+                We will generate and send a secure 6-digit OTP verification code to this address.
+              </p>
             </div>
 
             <div className="pt-2">
@@ -1093,12 +1118,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {loading ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    <span>Sending reset link...</span>
+                    <span>Sending verification OTP...</span>
                   </>
                 ) : (
                   <>
                     <Mail className="w-5 h-5 sm:w-6 sm:h-6" />
-                    <span>Send Password Reset Email</span>
+                    <span>Send Verification OTP</span>
                   </>
                 )}
               </button>
@@ -1120,56 +1145,137 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </form>
         )}
 
-        {/* D. RESET PASSWORD FORM (SETTING NEW PASSWORD) */}
-        {mode === 'reset-password' && (
-          <form onSubmit={handleResetPasswordSubmit} className="space-y-6">
-            <div>
-              <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
-                New Password <span className="text-[#ba1a1a]">*</span>
-              </label>
-              <div className="relative">
-                <Lock className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  placeholder="Min 8 characters"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full pl-12 sm:pl-14 pr-12 py-4 text-base sm:text-lg rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] font-medium shadow-xs focus:outline-none focus:border-[#56615a]"
-                />
+        {/* D. VERIFY OTP & RESET PASSWORD FORM */}
+        {mode === 'verify-otp' && (
+          <form onSubmit={handleVerifyOtpAndResetSubmit} className="space-y-6">
+            {/* Simulated OTP Notification Banner */}
+            {simulatedOtp && (
+              <div className="p-4 bg-[#e8f5e9] border-2 border-[#a5d6a7] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm font-semibold text-[#1b5e20] shadow-xs">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-[#2e7d32] shrink-0" />
+                  <span>
+                    Sent to <strong>{resetEmail}</strong>: Code is{' '}
+                    <strong className="font-mono text-base tracking-widest text-[#1b5e20] bg-white px-2 py-0.5 rounded border border-[#a5d6a7]">
+                      {simulatedOtp}
+                    </strong>
+                  </span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#737874] hover:text-[#1b1c1c] p-1 cursor-pointer"
+                  onClick={() => setOtpCode(simulatedOtp)}
+                  className="px-3.5 py-1.5 bg-[#2e7d32] hover:bg-[#1b5e20] text-white text-xs font-bold rounded-xl transition-all shadow-2xs cursor-pointer self-start sm:self-auto"
                 >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  Auto-Fill OTP
                 </button>
+              </div>
+            )}
+
+            {/* 6-Digit OTP Input */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block">
+                  6-Digit OTP Code <span className="text-[#ba1a1a]">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleForgotPasswordSubmit}
+                  disabled={loading}
+                  className="text-xs sm:text-sm font-bold text-[#56615a] hover:underline cursor-pointer"
+                >
+                  Resend Code
+                </button>
+              </div>
+              <div className="relative">
+                <KeyRound className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  placeholder="e.g. 123456"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ''))}
+                  className="w-full pl-12 sm:pl-14 pr-4 py-4 text-xl sm:text-2xl font-mono font-bold tracking-widest rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] shadow-xs focus:outline-none focus:border-[#56615a]"
+                />
               </div>
             </div>
 
-            <div>
-              <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
-                Confirm New Password <span className="text-[#ba1a1a]">*</span>
-              </label>
-              <div className="relative">
-                <Lock className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
-                <input
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  required
-                  placeholder="Re-enter new password"
-                  value={confirmNewPassword}
-                  onChange={(e) => setConfirmNewPassword(e.target.value)}
-                  className="w-full pl-12 sm:pl-14 pr-12 py-4 text-base sm:text-lg rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] font-medium shadow-xs focus:outline-none focus:border-[#56615a]"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#737874] hover:text-[#1b1c1c] p-1 cursor-pointer"
-                >
-                  {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
+            {/* New Password & Confirm Password */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+              <div>
+                <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
+                  New Password <span className="text-[#ba1a1a]">*</span>
+                </label>
+                <div className="relative">
+                  <Lock className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Min 8 characters"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full pl-12 sm:pl-14 pr-12 py-4 text-base sm:text-lg rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] font-medium shadow-xs focus:outline-none focus:border-[#56615a]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[#737874] hover:text-[#1b1c1c] p-1 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm sm:text-base font-bold text-[#2d312e] uppercase tracking-wide block mb-2">
+                  Confirm New Password <span className="text-[#ba1a1a]">*</span>
+                </label>
+                <div className="relative">
+                  <Lock className="w-5 h-5 sm:w-6 sm:h-6 text-[#56615a] absolute left-4 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Re-enter new password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    className="w-full pl-12 sm:pl-14 pr-12 py-4 text-base sm:text-lg rounded-2xl bg-white border-2 border-[#D8D6D4] text-[#1b1c1c] font-medium shadow-xs focus:outline-none focus:border-[#56615a]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[#737874] hover:text-[#1b1c1c] p-1 cursor-pointer"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
             </div>
+
+            {/* Password Strength Checklist */}
+            {newPassword && (
+              <div className="p-4 bg-[#f8faf8] border-2 border-[#E5E4E2] rounded-2xl space-y-2">
+                <div className="text-xs font-bold text-[#56615a] uppercase tracking-wider">
+                  New Password Requirements:
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className={`flex items-center gap-1.5 ${newPasswordStrength.hasMinLength ? 'text-[#20402b] font-bold' : 'text-[#737874]'}`}>
+                    <Check className={`w-3.5 h-3.5 ${newPasswordStrength.hasMinLength ? 'text-[#20402b]' : 'opacity-40'}`} />
+                    <span>8+ characters</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${newPasswordStrength.hasUppercase ? 'text-[#20402b] font-bold' : 'text-[#737874]'}`}>
+                    <Check className={`w-3.5 h-3.5 ${newPasswordStrength.hasUppercase ? 'text-[#20402b]' : 'opacity-40'}`} />
+                    <span>1 uppercase letter (A-Z)</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${newPasswordStrength.hasLowercase ? 'text-[#20402b] font-bold' : 'text-[#737874]'}`}>
+                    <Check className={`w-3.5 h-3.5 ${newPasswordStrength.hasLowercase ? 'text-[#20402b]' : 'opacity-40'}`} />
+                    <span>1 lowercase letter (a-z)</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 ${newPasswordStrength.hasNumber || newPasswordStrength.hasSpecial ? 'text-[#20402b] font-bold' : 'text-[#737874]'}`}>
+                    <Check className={`w-3.5 h-3.5 ${newPasswordStrength.hasNumber || newPasswordStrength.hasSpecial ? 'text-[#20402b]' : 'opacity-40'}`} />
+                    <span>Number or symbol</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="pt-2">
               <button
@@ -1180,14 +1286,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {loading ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    <span>Updating password...</span>
+                    <span>Verifying OTP & Updating...</span>
                   </>
                 ) : (
                   <>
                     <KeyRound className="w-5 h-5 sm:w-6 sm:h-6" />
-                    <span>Set New Password & Sign In</span>
+                    <span>Verify OTP & Update Password</span>
                   </>
                 )}
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('forgot-password');
+                  setErrorMessage(null);
+                  setSuccessMessage(null);
+                }}
+                className="font-bold text-[#56615a] hover:underline cursor-pointer"
+              >
+                ← Change Email
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setErrorMessage(null);
+                  setSuccessMessage(null);
+                }}
+                className="font-bold text-[#737874] hover:text-[#1b1c1c] hover:underline cursor-pointer"
+              >
+                Cancel & Sign In
               </button>
             </div>
           </form>

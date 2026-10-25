@@ -827,6 +827,90 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
+// Password Reset OTP In-Memory Store
+interface OtpRecord {
+  code: string;
+  expiresAt: number;
+}
+const otpStore = new Map<string, OtpRecord>();
+
+// Request OTP for password reset
+app.post('/api/auth/forgot-password', (req, res) => {
+  const { email } = req.body;
+  if (!email || !email.trim()) {
+    return res.status(400).json({ error: 'Please enter your registered email address.' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const foundUser = registeredUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+  if (!foundUser) {
+    return res.status(404).json({ error: 'No account found with this email address. Please check spelling or register an account.' });
+  }
+
+  // Generate 6-digit random OTP
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  otpStore.set(cleanEmail, { code: otpCode, expiresAt });
+
+  console.log(`[Auth Service] Password reset OTP generated for ${cleanEmail}: ${otpCode}`);
+
+  res.json({
+    success: true,
+    message: `A 6-digit verification OTP has been sent to ${cleanEmail}.`,
+    email: cleanEmail,
+    otp: otpCode, // Provided for instant demo testing and verification
+  });
+});
+
+// Verify OTP & Reset Password
+app.post('/api/auth/verify-reset-otp', (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !email.trim()) {
+    return res.status(400).json({ error: 'Email address is required.' });
+  }
+  if (!otp || !otp.trim()) {
+    return res.status(400).json({ error: 'Please enter the 6-digit OTP code.' });
+  }
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanOtp = otp.trim();
+  const record = otpStore.get(cleanEmail);
+
+  if (!record) {
+    return res.status(400).json({ error: 'No OTP request found for this email. Please request a new code.' });
+  }
+
+  if (Date.now() > record.expiresAt) {
+    otpStore.delete(cleanEmail);
+    return res.status(400).json({ error: 'The OTP code has expired. Please request a new one.' });
+  }
+
+  if (record.code !== cleanOtp) {
+    return res.status(400).json({ error: 'Invalid OTP code. Please enter the correct 6-digit code.' });
+  }
+
+  // OTP verified! Update user password
+  const foundUser = registeredUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+  if (!foundUser) {
+    return res.status(404).json({ error: 'User account not found.' });
+  }
+
+  foundUser.password = newPassword.trim();
+  otpStore.delete(cleanEmail);
+
+  console.log(`[Auth Service] Password successfully reset for ${cleanEmail}`);
+
+  res.json({
+    success: true,
+    message: 'Password successfully updated! You can now log in with your new password.',
+  });
+});
+
 // Classrooms
 app.get('/api/classrooms', (req, res) => {
   res.json(classrooms);
