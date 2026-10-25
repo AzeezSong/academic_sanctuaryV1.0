@@ -377,70 +377,87 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const trimmedClassCode = classCode.trim().toUpperCase();
       const trimmedRegNo = registrationNumber.trim().toUpperCase();
 
-      // Register user through Supabase Auth
-      const { data, error } = await supabase.auth.signUp({
-        email: trimmedEmail,
-        password: signupPassword,
-        options: {
-          data: {
-            full_name: trimmedFullName,
-            class_code: trimmedClassCode,
-            registration_number: trimmedRegNo,
-          },
-        },
-      });
-
-      if (error) {
-        if (error.message.toLowerCase().includes('already registered')) {
-          setErrorMessage('An account with this email already exists. Please sign in instead.');
-        } else {
-          setErrorMessage(error.message);
-        }
-        setLoading(false);
-        return;
-      }
-
-      // If user was created, also ensure profile is saved to public profiles table
-      if (data.user) {
-        try {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert({
-              id: data.user.id,
+      // Register user through Supabase Auth or Local Server
+      // 1. Try Supabase Auth first if configured
+      let supabaseSuccess = false;
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password: signupPassword,
+          options: {
+            data: {
               full_name: trimmedFullName,
               class_code: trimmedClassCode,
               registration_number: trimmedRegNo,
-            });
-
-          if (profileError) {
-            console.warn('Note: Profile upsert returned:', profileError.message);
-          }
-        } catch (pe) {
-          console.warn('Note: Error saving profile to profiles table:', pe);
-        }
-
-        // Check if email confirmation is required by Supabase
-        if (!data.session) {
-          setEmailConfirmationSent(true);
-          setSuccessMessage(
-            `Registration successful! A confirmation email has been sent to ${trimmedEmail}. Please check your inbox and verify your email to log in.`
-          );
-          setLoading(false);
-          return;
-        }
-
-        // If email confirmation is disabled or immediate session returned
-        confetti({ particleCount: 70, spread: 80 });
-        const { user: appUser, classroom: appClassroom } = await buildAppUser(data.user, {
-          id: data.user.id,
-          full_name: trimmedFullName,
-          class_code: trimmedClassCode,
-          registration_number: trimmedRegNo,
+            },
+          },
         });
 
-        onAuthSuccess(appUser, appClassroom, 'Account created and authenticated successfully!');
-        onClose();
+        if (!error && data?.user) {
+          try {
+            await supabase
+              .from('profiles')
+              .upsert({
+                id: data.user.id,
+                full_name: trimmedFullName,
+                class_code: trimmedClassCode,
+                registration_number: trimmedRegNo,
+              });
+          } catch (pe) {
+            console.warn('Note: Profile upsert returned:', pe);
+          }
+
+          if (!data.session) {
+            setEmailConfirmationSent(true);
+            setSuccessMessage(
+              `Registration successful! A confirmation email has been sent to ${trimmedEmail}. Please check your inbox and verify your email to log in.`
+            );
+            setLoading(false);
+            return;
+          }
+
+          confetti({ particleCount: 70, spread: 80 });
+          const { user: appUser, classroom: appClassroom } = await buildAppUser(data.user, {
+            id: data.user.id,
+            full_name: trimmedFullName,
+            class_code: trimmedClassCode,
+            registration_number: trimmedRegNo,
+          });
+
+          onAuthSuccess(appUser, appClassroom, 'Account created and authenticated successfully!');
+          onClose();
+          supabaseSuccess = true;
+          return;
+        }
+      } catch (sbErr) {
+        // Fall back to server registration
       }
+
+      // 2. Fallback to local server database (/api/auth/signup)
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: trimmedFullName,
+          email: trimmedEmail,
+          password: signupPassword,
+          regNo: trimmedRegNo,
+          rollNumber: trimmedRegNo,
+          department: 'Computer Science & Engineering',
+          classroomCode: trimmedClassCode,
+          classroomOption: 'join',
+        }),
+      });
+
+      const resData = await res.json();
+      if (res.ok && resData.user) {
+        confetti({ particleCount: 70, spread: 80 });
+        onAuthSuccess(resData.user, resData.classroom, resData.message || 'Account created successfully!');
+        onClose();
+        return;
+      }
+
+      setErrorMessage(resData.error || 'Registration failed. Please check your details and try again.');
     } catch (err: any) {
       setErrorMessage(err.message || 'An unexpected error occurred during registration.');
     } finally {
